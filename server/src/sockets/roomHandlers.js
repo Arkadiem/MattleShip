@@ -1,4 +1,5 @@
 import { Room } from '../models/Room.js'
+import { getTurso } from '../config/turso.js'
 
 const activeRooms = new Map()
 
@@ -196,15 +197,17 @@ async function handlePlayerLeave(io, socket, roomId) {
         })
 
         try {
-          const turso = (await import('../config/turso.js')).getTurso()
-          await turso.execute({
-            sql: 'UPDATE users SET wins = wins + 1 WHERE nickname = ?',
-            args: [winner.playerName]
-          })
-          await turso.execute({
-            sql: 'UPDATE users SET losses = losses + 1 WHERE nickname = ?',
-            args: [socket.playerName]
-          })
+          const turso = getTurso()
+          if (turso) {
+            await turso.execute({
+              sql: 'UPDATE users SET wins = wins + 1 WHERE nickname = ?',
+              args: [winner.playerName]
+            })
+            await turso.execute({
+              sql: 'UPDATE users SET losses = losses + 1 WHERE nickname = ?',
+              args: [socket.playerName]
+            })
+          }
         } catch (err) {
           console.error('Error updating stats:', err)
         }

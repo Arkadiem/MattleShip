@@ -1,14 +1,48 @@
 import { activeRooms } from './roomHandlers.js'
 import { Room } from '../models/Room.js'
+import { getTurso } from '../config/turso.js'
 
-function generateShipPosition() {
-  const row = Math.floor(Math.random() * 8)
-  const col = Math.floor(Math.random() * 6)
-  return [
-    { row, col },
-    { row, col: col + 1 },
-    { row, col: col + 2 }
-  ]
+function generateFleet() {
+  const fleet = []
+  const flatShips = []
+  const sizes = [4, 3, 3, 2, 2]
+  const boardSize = 8
+  const occupied = new Set()
+
+  for (const size of sizes) {
+    let placed = false
+    let attempts = 0
+    while (!placed && attempts < 100) {
+      attempts++
+      const isHorizontal = Math.random() < 0.5
+      const row = Math.floor(Math.random() * boardSize)
+      const col = Math.floor(Math.random() * boardSize)
+      
+      const currentShip = []
+      let isValid = true
+
+      for (let i = 0; i < size; i++) {
+        const r = row + (isHorizontal ? 0 : i)
+        const c = col + (isHorizontal ? i : 0)
+
+        if (r >= boardSize || c >= boardSize || occupied.has(`${r},${c}`)) {
+          isValid = false
+          break
+        }
+        currentShip.push({ row: r, col: c })
+      }
+
+      if (isValid) {
+        currentShip.forEach(cell => {
+          occupied.add(`${cell.row},${cell.col}`)
+          flatShips.push({ row: cell.row, col: cell.col })
+        })
+        fleet.push(currentShip)
+        placed = true
+      }
+    }
+  }
+  return { fleet, flatShips }
 }
 
 function initializeGameState(players) {
@@ -20,17 +54,18 @@ function initializeGameState(players) {
   }
 
   for (const [socketId, player] of players) {
-    const ships = generateShipPosition()
+    const { fleet, flatShips } = generateFleet()
     const board = Array(8).fill(null).map(() => Array(8).fill('empty'))
     
-    ships.forEach(ship => {
+    flatShips.forEach(ship => {
       board[ship.row][ship.col] = 'ship'
     })
 
     gameState.players[socketId] = {
       name: player.name,
       board,
-      ships,
+      fleet,
+      ships: flatShips,
       hits: [],
       misses: []
     }
@@ -69,6 +104,12 @@ export function setupGameHandlers(io, socket) {
   })
 
   socket.on('attack', async ({ roomId, row, col }) => {
+    if (typeof row !== 'number' || typeof col !== 'number' ||
+        row < 0 || row > 7 || col < 0 || col > 7) {
+      socket.emit('room-error', 'Coordenadas de ataque inválidas')
+      return
+    }
+
     const activeRoom = activeRooms.get(roomId)
     if (!activeRoom || !activeRoom.gameState) {
       socket.emit('room-error', 'Juego no encontrado')
@@ -100,17 +141,30 @@ export function setupGameHandlers(io, socket) {
     }
 
     const isHit = enemy.ships.some(ship => ship.row === row && ship.col === col)
+    let sunkShip = false
 
     if (isHit) {
       attacker.hits = [...(attacker.hits || []), { row, col }]
       
-      const allShipCells = enemy.ships
       const allHits = attacker.hits
-      const shipSunk = allShipCells.every(cell => 
-        allHits.some(hit => hit.row === cell.row && hit.col === cell.col)
+      
+      for (const ship of enemy.fleet) {
+        if (ship.some(cell => cell.row === row && cell.col === col)) {
+          const isSunk = ship.every(cell => 
+            allHits.some(hit => hit.row === cell.row && hit.col === cell.col)
+          )
+          if (isSunk) sunkShip = true
+          break
+        }
+      }
+
+      const allShipsSunk = enemy.fleet.every(shipCells => 
+        shipCells.every(cell => 
+          allHits.some(hit => hit.row === cell.row && hit.col === cell.col)
+        )
       )
 
-      if (shipSunk) {
+      if (allShipsSunk) {
         gameState.status = 'finished'
         gameState.winner = socket.id
 
@@ -132,18 +186,20 @@ export function setupGameHandlers(io, socket) {
         })
 
         try {
-          const turso = (await import('../config/turso.js')).getTurso()
-          const winnerName = gameState.players[socket.id].name
-          const loserName = gameState.players[enemyId].name
-          
-          await turso.execute({
-            sql: 'UPDATE users SET wins = wins + 1 WHERE nickname = ?',
-            args: [winnerName]
-          })
-          await turso.execute({
-            sql: 'UPDATE users SET losses = losses + 1 WHERE nickname = ?',
-            args: [loserName]
-          })
+          const turso = getTurso()
+          if (turso) {
+            const winnerName = gameState.players[socket.id].name
+            const loserName = gameState.players[enemyId].name
+            
+            await turso.execute({
+              sql: 'UPDATE users SET wins = wins + 1 WHERE nickname = ?',
+              args: [winnerName]
+            })
+            await turso.execute({
+              sql: 'UPDATE users SET losses = losses + 1 WHERE nickname = ?',
+              args: [loserName]
+            })
+          }
         } catch (err) {
           console.error('Error updating stats:', err)
         }
@@ -161,7 +217,8 @@ export function setupGameHandlers(io, socket) {
       attacker: socket.id,
       row,
       col,
-      hit: isHit
+      hit: isHit,
+      sunk: sunkShip
     })
   })
 
@@ -212,21 +269,23 @@ export function setupGameHandlers(io, socket) {
       })
 
       try {
-        const turso = (await import('../config/turso.js')).getTurso()
-        const winnerName = activeRoom.players.get(enemyId)?.name
-        const loserName = activeRoom.players.get(socket.id)?.name
-        
-        if (winnerName) {
-          await turso.execute({
-            sql: 'UPDATE users SET wins = wins + 1 WHERE nickname = ?',
-            args: [winnerName]
-          })
-        }
-        if (loserName) {
-          await turso.execute({
-            sql: 'UPDATE users SET losses = losses + 1 WHERE nickname = ?',
-            args: [loserName]
-          })
+        const turso = getTurso()
+        if (turso) {
+          const winnerName = activeRoom.players.get(enemyId)?.name
+          const loserName = activeRoom.players.get(socket.id)?.name
+          
+          if (winnerName) {
+            await turso.execute({
+              sql: 'UPDATE users SET wins = wins + 1 WHERE nickname = ?',
+              args: [winnerName]
+            })
+          }
+          if (loserName) {
+            await turso.execute({
+              sql: 'UPDATE users SET losses = losses + 1 WHERE nickname = ?',
+              args: [loserName]
+            })
+          }
         }
       } catch (err) {
         console.error('Error updating stats:', err)

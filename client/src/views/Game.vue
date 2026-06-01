@@ -18,6 +18,21 @@
       {{ gameStore.isMyTurn ? '🎯 Tu turno' : '⏳ Turno del oponente' }}
     </div>
 
+    <div v-if="gameStarted && !gameStore.isGameFinished" class="status-bars">
+      <div class="status-player">
+        <span class="status-name">Tus Barcos</span>
+        <div class="health-bar">
+          <div class="health-fill my-health" :style="{ width: myHealthPercent + '%' }"></div>
+        </div>
+      </div>
+      <div class="status-player">
+        <span class="status-name">Barcos Enemigos</span>
+        <div class="health-bar">
+          <div class="health-fill enemy-health" :style="{ width: enemyHealthPercent + '%' }"></div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showConfirmDialog" class="confirm-overlay">
       <div class="confirm-dialog card">
         <h3>⚠️ Abandonar Partida</h3>
@@ -59,22 +74,33 @@
         <div v-else class="game-boards">
           <div class="board-section enemy-section">
             <h3 class="board-title">Tablero Enemigo</h3>
-            <div :class="['board', 'enemy-board', { shake: boardShake }]">
-              <div 
-                v-for="(row, rowIndex) in 8" 
-                :key="'enemy-' + rowIndex"
-                class="board-row"
-              >
-                <div 
-                  v-for="(col, colIndex) in 8" 
-                  :key="'enemy-' + rowIndex + '-' + colIndex"
-                  class="cell"
-                  :class="getEnemyCellClass(rowIndex, colIndex)"
-                  @click="handleAttack(rowIndex, colIndex)"
-                >
-                  <span v-if="getEnemyCellContent(rowIndex, colIndex)">
-                    {{ getEnemyCellContent(rowIndex, colIndex) }}
-                  </span>
+            <div class="board-wrapper">
+              <div class="board-coords-top">
+                <div class="coord-corner"></div>
+                <div v-for="col in 8" :key="'col-'+col" class="coord-label">{{ col }}</div>
+              </div>
+              <div class="board-with-side-coords">
+                <div class="board-coords-side">
+                  <div v-for="row in 8" :key="'row-'+row" class="coord-label">{{ String.fromCharCode(64 + row) }}</div>
+                </div>
+                <div :class="['board', 'enemy-board', { shake: boardShake }]">
+                  <div 
+                    v-for="(row, rowIndex) in 8" 
+                    :key="'enemy-' + rowIndex"
+                    class="board-row"
+                  >
+                    <div 
+                      v-for="(col, colIndex) in 8" 
+                      :key="'enemy-' + rowIndex + '-' + colIndex"
+                      class="cell"
+                      :class="getEnemyCellClass(rowIndex, colIndex)"
+                      @click="handleAttack(rowIndex, colIndex)"
+                    >
+                      <span v-if="getEnemyCellContent(rowIndex, colIndex)">
+                        {{ getEnemyCellContent(rowIndex, colIndex) }}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -82,21 +108,32 @@
 
           <div class="board-section my-section">
             <h3 class="board-title">Tu Tablero</h3>
-            <div class="board my-board">
-              <div 
-                v-for="(row, rowIndex) in 8" 
-                :key="'my-' + rowIndex"
-                class="board-row"
-              >
-                <div 
-                  v-for="(col, colIndex) in 8" 
-                  :key="'my-' + rowIndex + '-' + colIndex"
-                  class="cell"
-                  :class="getMyCellClass(rowIndex, colIndex)"
-                >
-                  <span v-if="getMyCellContent(rowIndex, colIndex)">
-                    {{ getMyCellContent(rowIndex, colIndex) }}
-                  </span>
+            <div class="board-wrapper">
+              <div class="board-coords-top">
+                <div class="coord-corner"></div>
+                <div v-for="col in 8" :key="'col-'+col" class="coord-label">{{ col }}</div>
+              </div>
+              <div class="board-with-side-coords">
+                <div class="board-coords-side">
+                  <div v-for="row in 8" :key="'row-'+row" class="coord-label">{{ String.fromCharCode(64 + row) }}</div>
+                </div>
+                <div class="board my-board">
+                  <div 
+                    v-for="(row, rowIndex) in 8" 
+                    :key="'my-' + rowIndex"
+                    class="board-row"
+                  >
+                    <div 
+                      v-for="(col, colIndex) in 8" 
+                      :key="'my-' + rowIndex + '-' + colIndex"
+                      class="cell"
+                      :class="getMyCellClass(rowIndex, colIndex)"
+                    >
+                      <span v-if="getMyCellContent(rowIndex, colIndex)">
+                        {{ getMyCellContent(rowIndex, colIndex) }}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -157,6 +194,17 @@ const isWinner = computed(() => {
   return gameStore.winner === socketService.getSocket().id
 })
 
+const totalShipCells = 14 // 4 + 3 + 3 + 2 + 2
+const myHealthPercent = computed(() => {
+  const hitsTaken = gameStore.enemyHits.length
+  return Math.max(0, ((totalShipCells - hitsTaken) / totalShipCells) * 100)
+})
+
+const enemyHealthPercent = computed(() => {
+  const hitsGiven = gameStore.myHits.length
+  return Math.max(0, ((totalShipCells - hitsGiven) / totalShipCells) * 100)
+})
+
 const myHitsSet = computed(() => new Set(gameStore.myHits.map(h => `${h.row},${h.col}`)))
 const myMissesSet = computed(() => new Set(gameStore.myMisses.map(m => `${m.row},${m.col}`)))
 const enemyHitsSet = computed(() => new Set(gameStore.enemyHits.map(h => `${h.row},${h.col}`)))
@@ -190,18 +238,22 @@ onMounted(() => {
     gameStore.updateGameState(data.gameState)
     
     if (data.hit) {
-      gameMessage.value = data.attacker === socket.id ? '¡Impacto!' : '¡Tu barco fue impactado!'
+      if (data.sunk) {
+        gameMessage.value = data.attacker === socket.id ? '¡Hundiste un barco enemigo! 🚢💥' : '¡Hundieron uno de tus barcos! 😱'
+      } else {
+        gameMessage.value = data.attacker === socket.id ? '¡Impacto! 🔥' : '¡Tu barco fue impactado! ⚠️'
+      }
       gameMessageType.value = data.attacker === socket.id ? 'success' : 'danger'
       if (data.attacker !== socket.id) {
         boardShake.value = true
         setTimeout(() => { boardShake.value = false }, 500)
       }
     } else {
-      gameMessage.value = data.attacker === socket.id ? 'Agua...' : 'El oponente falló'
+      gameMessage.value = data.attacker === socket.id ? 'Agua... 💦' : 'El oponente falló 😌'
       gameMessageType.value = 'info'
     }
     
-    setTimeout(() => { gameMessage.value = '' }, 2000)
+    setTimeout(() => { gameMessage.value = '' }, 2500)
   })
 
   socket.on('game-over', (data) => {
@@ -417,6 +469,54 @@ function leaveToLobby() {
   border-bottom-color: rgba(46, 204, 113, 0.3);
 }
 
+.status-bars {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  padding: 12px 24px;
+  background: rgba(10, 22, 40, 0.6);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.status-player {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 200px;
+}
+
+.status-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--light);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.health-bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.health-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.my-health {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.enemy-health {
+  background: var(--secondary);
+  box-shadow: 0 0 8px var(--secondary);
+}
+
 .game-main {
   flex: 1;
   padding: 24px;
@@ -520,6 +620,51 @@ function leaveToLobby() {
   color: var(--light);
 }
 
+.board-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.board-coords-top {
+  display: flex;
+  margin-bottom: 4px;
+}
+
+.coord-corner {
+  width: 30px;
+  height: 30px;
+}
+
+.board-with-side-coords {
+  display: flex;
+}
+
+.board-coords-side {
+  display: flex;
+  flex-direction: column;
+  margin-right: 4px;
+}
+
+.coord-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--light-dark);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.board-coords-top .coord-label {
+  width: 50px;
+  height: 30px;
+}
+
+.board-coords-side .coord-label {
+  width: 30px;
+  height: 50px;
+}
+
 .board {
   display: inline-grid;
   grid-template-columns: repeat(8, 1fr);
@@ -559,16 +704,35 @@ function leaveToLobby() {
 
 .cell-ship {
   background: var(--ship);
+  position: relative;
+}
+.cell-ship::after {
+  content: '';
+  position: absolute;
+  top: 10%;
+  left: 10%;
+  right: 10%;
+  bottom: 10%;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  pointer-events: none;
 }
 
 .cell-hit {
   background: var(--hit);
   animation: hit 0.3s ease;
+  box-shadow: inset 0 0 15px rgba(0,0,0,0.5);
 }
 
 .cell-miss {
   background: var(--miss);
   opacity: 0.7;
+  animation: ripple 0.6s ease-out;
+}
+
+@keyframes ripple {
+  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
+  100% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
 }
 
 @keyframes hit {
@@ -677,9 +841,24 @@ function leaveToLobby() {
 
 @media (max-width: 768px) {
   .cell {
-    width: 40px;
-    height: 40px;
-    font-size: 1rem;
+    width: 35px;
+    height: 35px;
+    font-size: 0.9rem;
+  }
+  
+  .board-coords-top .coord-label {
+    width: 35px;
+    height: 25px;
+  }
+
+  .board-coords-side .coord-label {
+    width: 25px;
+    height: 35px;
+  }
+
+  .coord-corner {
+    width: 25px;
+    height: 25px;
   }
 
   .header-content {
